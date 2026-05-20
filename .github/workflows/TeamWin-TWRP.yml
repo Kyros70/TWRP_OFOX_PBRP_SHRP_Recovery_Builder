@@ -6,7 +6,7 @@ on:
       MANIFEST_BRANCH:
         description: 'TWRP Manifest Branch'
         required: true
-        default: ''
+        default: 'twrp-12.1'
         type: choice
         options:
         - twrp-14.1
@@ -22,11 +22,11 @@ on:
         - twrp-5.1
         - twrp-4.4-deprecated
       DEVICE_TREE:
-        description: 'Custom Recovery Tree' # Your already made Device Tree for TWRP
+        description: 'Custom Recovery Tree'
         required: true
         default: 'https://github.com/username/repo'
       DEVICE_TREE_BRANCH:
-        description: 'Custom Recovery Tree Branch' # Your Device Tree Branch, make sure it's right.
+        description: 'Custom Recovery Tree Branch'
         required: true
         default: 'enter_your_branch'
       DEVICE_PATH:
@@ -42,7 +42,7 @@ on:
         required: true
         default: 'omni_'
       BUILD_TARGET:
-        description: 'Specify your Build Target' # Pick among boot, recovery and vendor_boot
+        description: 'Specify your Build Target'
         required: true
         default: 'recovery'
         type: choice
@@ -56,7 +56,7 @@ on:
         default: 'false'
         type: boolean
       LDCHECKPATH:
-        description: 'Path of blobs to check' # Use it know what kind of dependencies your missing for decryption blobs.
+        description: 'Path of blobs to check'
         required: true
         default: 'system/bin/qseecomd'
 
@@ -79,11 +79,11 @@ jobs:
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
       with:
-        swap-size-gb: 12
+        swap-size-gb: 16
 
     - name: Check Manifest Branch
       run: |
-        if [ ${{ inputs.MANIFEST_BRANCH }} == 'twrp-11' ] || [ ${{ inputs.MANIFEST_BRANCH }} == 'twrp-12.1' ] || [ ${{ inputs.MANIFEST_BRANCH }} == 'twrp-14' ]; then
+        if [ "${{ inputs.MANIFEST_BRANCH }}" = "twrp-11" ] || [ "${{ inputs.MANIFEST_BRANCH }}" = "twrp-12.1" ] || [ "${{ inputs.MANIFEST_BRANCH }}" = "twrp-14" ] || [ "${{ inputs.MANIFEST_BRANCH }}" = "twrp-14.1" ]; then
             echo "MANIFEST=https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git" >> $GITHUB_ENV
             echo "CHECK_LEGACY_BRANCH=false" >> $GITHUB_ENV
         else
@@ -93,16 +93,12 @@ jobs:
 
     - name: Prepare the environment
       run: |
+        export DEBIAN_FRONTEND=noninteractive
         sudo apt update
-        sudo apt -y upgrade
         
-        # Required for python2 on 22.04
-        sudo add-apt-repository universe
-        
-        # Note: 'python-is-python2' does NOT exist in 22.04. We install the raw binary.
+        # Required for python2 on Ubuntu 22.04
+        sudo add-apt-repository universe -y
         sudo apt -y install python2
-        
-        # This is required because there is no package to do it for us anymore.
         sudo ln -sf /usr/bin/python2 /usr/bin/python
         
         sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
@@ -147,17 +143,38 @@ jobs:
     - name: Installing python2 for legacy builds
       if: env.CHECK_LEGACY_BRANCH == 'true'
       run: |
-        sudo apt-get install python2 python-is-python2
+        export DEBIAN_FRONTEND=noninteractive
+        sudo apt-get install -y python2
+        sudo ln -sf /usr/bin/python2 /usr/bin/python
 
     - name: Building Image 
       run: |
         cd android-recovery
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        lunch ${{ inputs.MAKEFILE_NAME }}-eng && make clean && make ${{ inputs.BUILD_TARGET }}image -j$(nproc --all)
+        
+        # Hard lock Ninja build system to a single thread to completely avoid swap thrashing
+        export NINJA_ARGS="-j1"
+        
+        # Stifles global Java heap sizes to avoid tripping the host kernel's memory limits
+        export _JAVA_OPTIONS="-Xmx3g -XX:ParallelGCThreads=1"
+        export ANDROID_JACK_VM_ARGS="-Dfile.encoding=UTF-8 -XX:+TieredCompilation -Xmx3g"
+        export USES_METALAVA=1
+        export METALAVA_JVM_ARGS="-Xmx3g"
+        export R8_COMPILER_ARGUMENTS="-Xmx3g"
+        
+        # Initialize Android device environment variables
+        lunch ${{ inputs.MAKEFILE_NAME }}-eng
+        
+        # Wipe directories sequentially
+        make clean
+        
+        # Compile sequentially to prevent freezes
+        make ${{ inputs.BUILD_TARGET }}image -j1
+        
         echo "Done building your ${{ inputs.BUILD_TARGET }}.img"
 
-    - name: Set Build Date # Output will be use in Release
+    - name: Set Build Date
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
       
