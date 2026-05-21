@@ -71,7 +71,7 @@ jobs:
       contents: write
     steps:
     - name: Check Out
-      uses: actions/checkout@v6
+      uses: actions/checkout@v4
       
     - name: Cleanup
       uses: rokibhasansagar/slimhub_actions@main
@@ -79,7 +79,7 @@ jobs:
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
       with:
-        swap-size-gb: 16
+        swap-size-gb: 24
 
     - name: Check Manifest Branch
       run: |
@@ -109,7 +109,7 @@ jobs:
         lzma ncftp qemu-user-static libstdc++-10-dev libtinfo5 libgflags-dev libncurses5
         
     - name: Install OpenJDK
-      uses: actions/setup-java@v5
+      uses: actions/setup-java@v4
       with:
         distribution: 'zulu'
         java-version: '8'
@@ -153,25 +153,23 @@ jobs:
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         
-        # Hard lock Ninja build system to a single thread to completely avoid swap thrashing
+        # Hard lock threads and java heaps to stop OOM kills
+        export SOONG_UI_NINJA_ARGS="-j1"
         export NINJA_ARGS="-j1"
+        export _JAVA_OPTIONS="-Xmx4g"
+        export ANDROID_JACK_VM_ARGS="-Dfile.encoding=UTF-8 -XX:+TieredCompilation -Xmx4g"
         
-        # Stifles global Java heap sizes to avoid tripping the host kernel's memory limits
-        export _JAVA_OPTIONS="-Xmx3g -XX:ParallelGCThreads=1"
-        export ANDROID_JACK_VM_ARGS="-Dfile.encoding=UTF-8 -XX:+TieredCompilation -Xmx3g"
-        export USES_METALAVA=1
-        export METALAVA_JVM_ARGS="-Xmx3g"
-        export R8_COMPILER_ARGUMENTS="-Xmx3g"
-        
-        # Initialize Android device environment variables
         lunch ${{ inputs.MAKEFILE_NAME }}-eng
+        m clean
         
-        # Wipe directories sequentially
-        make clean
+        # Background keep-alive script to prevent 60-minute silent timeouts
+        while true; do echo "Still building... $(date)"; sleep 300; done &
+        KEEPALIVE_PID=$!
         
-        # Compile sequentially to prevent freezes
-        make ${{ inputs.BUILD_TARGET }}image -j1
+        # Use 'm' instead of make, and append 'showcommands' so it logs every step
+        m -j1 showcommands ${{ inputs.BUILD_TARGET }}image
         
+        kill $KEEPALIVE_PID
         echo "Done building your ${{ inputs.BUILD_TARGET }}.img"
 
     - name: Set Build Date
